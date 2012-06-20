@@ -51,8 +51,9 @@ typedef enum _GncABTransType GncABTransType;
 enum _GncABTransType
 {
     SINGLE_TRANSFER = 0,
+    SINGLE_SEPA_TRANSFER,
     SINGLE_DEBITNOTE,
-    SINGLE_INTERNAL_TRANSFER
+    SINGLE_INTERNAL_TRANSFER,
 };
 
 /**

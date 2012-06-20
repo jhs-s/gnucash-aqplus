@@ -34,10 +34,12 @@
 #include <glib/gi18n.h>
 #if HAVE_KTOBLZCHECK_H
 #    include <ktoblzcheck.h>
+#    include <iban.h>
 #endif
 #include <aqbanking/jobsingletransfer.h>
 #include <aqbanking/jobsingledebitnote.h>
 #include <aqbanking/jobinternaltransfer.h>
+#include <aqbanking/jobsepatransfer.h>
 
 #include "dialog-ab-trans.h"
 #include "dialog-transfer.h"
@@ -68,6 +70,8 @@ static AB_JOB *gnc_ab_trans_dialog_get_available_empty_job(AB_ACCOUNT *ab_acc,
 static void gnc_ab_trans_dialog_check_ktoblzcheck(const GncABTransDialog *td,
         const AB_TRANSACTION *trans);
 
+static gint gnc_ab_trans_dialog_get_trans_code(GncABTransDialog *td);
+
 /* Callbacks - connected with GtkBuilder */
 G_MODULE_EXPORT void gnc_ab_trans_dialog_bankcode_changed_cb(GtkEditable *editable, gpointer user_data);
 G_MODULE_EXPORT void gnc_ab_trans_dialog_add_templ_cb(GtkButton *button, gpointer user_data);
@@ -85,7 +89,6 @@ G_MODULE_EXPORT void gnc_ab_trans_dialog_templ_list_row_activated_cb(GtkTreeView
         GtkTreeViewColumn *column,
         gpointer user_data);
 G_MODULE_EXPORT void gnc_ab_trans_dialog_verify_values(GncABTransDialog *td);
-
 
 enum
 {
@@ -140,6 +143,7 @@ struct _GncABTransDialog
 #if HAVE_KTOBLZCHECK_H
     /* object for Account number checking */
     AccountNumberCheck *blzcheck;
+    IbanCheck *ibancheck;
 #endif
 };
 
@@ -158,6 +162,23 @@ gnc_ab_trans_dialog_fill_templ_helper(gpointer data, gpointer user_data)
                        -1);
 }
 
+static gint 
+gnc_ab_trans_dialog_get_trans_code(GncABTransDialog *td)
+{
+    /* If this is a direct debit, a textkey/ "Textschluessel"/transactionCode
+     * different from the default has to be set. */
+    switch (td->trans_type)
+    {
+        case SINGLE_DEBITNOTE:
+            /* AB_Transaction_SetTransactionCode (trans, 05); */
+            return 05;
+        default:
+            /* AB_Transaction_SetTransactionCode (trans, 51); */
+            return 51;
+    }
+    
+}
+
 /**
  * Create a new AB_TRANSACTION, fill the values from the entry fields into it
  * and return it.  The caller must AB_TRANSACTION_free() it when finished.
@@ -169,50 +190,88 @@ gnc_ab_trans_dialog_fill_values(GncABTransDialog *td)
     AB_TRANSACTION *trans = AB_Transaction_new();
     AB_VALUE *value;
 
-    AB_Transaction_SetLocalBankCode(trans, AB_Account_GetBankCode(td->ab_acc));
-    AB_Transaction_SetLocalAccountNumber(
-        trans, AB_Account_GetAccountNumber(td->ab_acc));
-    AB_Transaction_SetLocalCountry(trans, "DE");
-
-    AB_Transaction_SetRemoteBankCode(
-        trans, gtk_entry_get_text(GTK_ENTRY(td->recp_bankcode_entry)));
-    AB_Transaction_SetRemoteAccountNumber(
-        trans, gtk_entry_get_text(GTK_ENTRY(td->recp_account_entry)));
-    AB_Transaction_SetRemoteCountry(trans, "DE");
     AB_Transaction_AddRemoteName(
-        trans, gtk_entry_get_text(GTK_ENTRY(td->recp_name_entry)), FALSE);
-
+                                 trans, gtk_entry_get_text(GTK_ENTRY(td->recp_name_entry)), FALSE);
     AB_Transaction_AddPurpose(
-        trans, gtk_entry_get_text(GTK_ENTRY(td->purpose_entry)), FALSE);
+                              trans, gtk_entry_get_text(GTK_ENTRY(td->purpose_entry)), FALSE);
     AB_Transaction_AddPurpose(
-        trans, gtk_entry_get_text(GTK_ENTRY(td->purpose_cont_entry)), FALSE);
+                              trans, gtk_entry_get_text(GTK_ENTRY(td->purpose_cont_entry)), FALSE);
     AB_Transaction_AddPurpose(
-        trans, gtk_entry_get_text(GTK_ENTRY(td->purpose_cont2_entry)), FALSE);
+                              trans, gtk_entry_get_text(GTK_ENTRY(td->purpose_cont2_entry)), FALSE);
     AB_Transaction_AddPurpose(
-        trans, gtk_entry_get_text(GTK_ENTRY(td->purpose_cont3_entry)), FALSE);
+                              trans, gtk_entry_get_text(GTK_ENTRY(td->purpose_cont3_entry)), FALSE);
 
     value = AB_Value_fromDouble(gnc_amount_edit_get_damount(
-                                    GNC_AMOUNT_EDIT(td->amount_edit)));
+                                                            GNC_AMOUNT_EDIT(td->amount_edit)));
+    AB_Transaction_SetTextKey (trans, gnc_ab_trans_dialog_get_trans_code(td));
+    
     /* FIXME: Replace "EUR" by account-dependent string here. */
     AB_Value_SetCurrency(value, "EUR");
     AB_Transaction_SetValue(trans, value);
     AB_Value_free(value);
-
-    /* If this is a direct debit, a textkey/ "Textschluessel"/transactionCode
-     * different from the default has to be set. */
+    
     switch (td->trans_type)
     {
-    case SINGLE_DEBITNOTE:
-        /* AB_Transaction_SetTransactionCode (trans, 05); */
-        AB_Transaction_SetTextKey(trans, 05);
-        break;
-    default:
-        /* AB_Transaction_SetTransactionCode (trans, 51); */
-        AB_Transaction_SetTextKey (trans, 51);
-        break;
-    }
+        case SINGLE_DEBITNOTE:
+        case SINGLE_INTERNAL_TRANSFER:
+        case SINGLE_TRANSFER:
+            AB_Transaction_SetLocalBankCode(trans, AB_Account_GetBankCode(td->ab_acc));
+            AB_Transaction_SetLocalAccountNumber(
+                                                 trans, AB_Account_GetAccountNumber(td->ab_acc));
+            AB_Transaction_SetLocalCountry(trans, "DE");            
+            AB_Transaction_SetRemoteBankCode(
+                trans, gtk_entry_get_text(GTK_ENTRY(td->recp_bankcode_entry)));
+            AB_Transaction_SetRemoteAccountNumber(
+                trans, gtk_entry_get_text(GTK_ENTRY(td->recp_account_entry)));
+            AB_Transaction_SetRemoteCountry(trans, "DE");
+            break;
+        case SINGLE_SEPA_TRANSFER:
+            AB_Transaction_SetLocalIban(trans, AB_Account_GetIBAN(td->ab_acc));
+            AB_Transaction_SetLocalBic(trans, 
+                                       AB_Account_GetBIC(td->ab_acc));
+            AB_Transaction_SetRemoteIban(trans, 
+                                         gtk_entry_get_text(GTK_ENTRY(td->recp_bankcode_entry)));
+            AB_Transaction_SetRemoteBic(
+                trans, gtk_entry_get_text(GTK_ENTRY(td->recp_account_entry)));
+    };
 
     return trans;
+}
+
+#define PADDING_BLZ 10000000000
+#define PADDING_BBAN 1000000
+
+/* This is the checksum generated from "DE" letters in the IBAN */
+#define DE_CHECK 131400
+
+/* 
+ * Generate IBAN for German bank accounts as described here:
+ * http://www.iban.de/berechnung_iban.html
+ */
+static gchar*
+gnc_ab_trans_dialog_generate_iban (GncABTransDialog *td)
+{
+    const gchar *ab_accountnumber = AB_Account_GetAccountNumber(td->ab_acc);
+    const gchar *ab_bankcode = AB_Account_GetBankCode(td->ab_acc);
+    const gchar *ab_iban = AB_Account_GetIBAN(td->ab_acc);
+    
+    guint64 kto = atoi(ab_accountnumber);
+    guint64 blz = atoi(ab_bankcode);
+    guint64 bban;
+
+    guint iban_check;
+    
+    /* If the IBAN is set, we are happy */
+    if (ab_iban && strlen(ab_iban))
+        return g_strdup(ab_iban);
+    
+    bban = (kto + blz * PADDING_BLZ) * PADDING_BBAN; // + DE_CHECK;
+    
+    iban_check = 98 - (bban % 97);
+
+    return g_strdup_printf("%" G_GUINT64_FORMAT, bban);
+    //return g_strdup_printf("DE%02u%08" G_GUINT64_FORMAT "%010" G_GUINT64_FORMAT, 
+    //                       iban_check, blz, kto); 
 }
 
 GncABTransDialog *
@@ -223,7 +282,7 @@ gnc_ab_trans_dialog_new(GtkWidget *parent, AB_ACCOUNT *ab_acc,
     GncABTransDialog *td;
     GtkBuilder  *builder;
     const gchar *ab_ownername;
-    const gchar *ab_accountnumber;
+    gchar *ab_accountnumber;
     const gchar *ab_bankname;
     const gchar *ab_bankcode;
     G_GNUC_UNUSED GtkWidget *trans_vbox;
@@ -245,22 +304,32 @@ gnc_ab_trans_dialog_new(GtkWidget *parent, AB_ACCOUNT *ab_acc,
 
     g_return_val_if_fail(ab_acc, NULL);
 
-    ab_ownername = AB_Account_GetOwnerName(ab_acc);
-    if (!ab_ownername)
-        ab_ownername = "";
-    ab_accountnumber = AB_Account_GetAccountNumber(ab_acc);
-    ab_bankcode = AB_Account_GetBankCode(ab_acc);
-    ab_bankname = AB_Account_GetBankName(ab_acc);
-    if (!ab_bankname || !*ab_bankname)
-        ab_bankname = _("(unknown)");
-
     td = g_new0(GncABTransDialog, 1);
     td->parent = parent;
     td->ab_acc = ab_acc;
     td->trans_type = trans_type;
 
+    ab_ownername = AB_Account_GetOwnerName(ab_acc);
+    if (!ab_ownername)
+        ab_ownername = "";
+
+    switch (td->trans_type)
+    {
+        case SINGLE_SEPA_TRANSFER:
+            ab_accountnumber = gnc_ab_trans_dialog_generate_iban(td);
+            ab_bankcode = "";
+            break;
+        default:
+            ab_accountnumber = (gchar*) AB_Account_GetAccountNumber(ab_acc);
+            ab_bankcode = AB_Account_GetBankCode(ab_acc);
+    }
+    ab_bankname = AB_Account_GetBankName(ab_acc);
+    if (!ab_bankname || !*ab_bankname)
+        ab_bankname = _("(unknown)");
+    
 #if HAVE_KTOBLZCHECK_H
     td->blzcheck = AccountNumberCheck_new();
+    td->ibancheck = IbanCheck_new("");
 #endif
 
     builder = gtk_builder_new();
@@ -309,6 +378,11 @@ gnc_ab_trans_dialog_new(GtkWidget *parent, AB_ACCOUNT *ab_acc,
     g_signal_connect_swapped (gnc_amount_edit_gtk_entry(GNC_AMOUNT_EDIT(td->amount_edit)), "focus-out-event",
                               G_CALLBACK(gnc_ab_trans_dialog_verify_values), td);
 
+    gtk_label_set_text(GTK_LABEL(orig_name_label), ab_ownername);
+    gtk_label_set_text(GTK_LABEL(orig_account_label), ab_accountnumber);
+    gtk_label_set_text(GTK_LABEL(orig_bankname_label), ab_bankname);
+    gtk_label_set_text (GTK_LABEL (orig_bankcode_label), ab_bankcode);
+    
     /* Check for what kind of transaction this should be, and change the
      * labels accordingly */
     switch (trans_type)
@@ -317,9 +391,8 @@ gnc_ab_trans_dialog_new(GtkWidget *parent, AB_ACCOUNT *ab_acc,
     case SINGLE_INTERNAL_TRANSFER:
         /* all labels are already set */
         break;
-    case SINGLE_DEBITNOTE:
-        gtk_label_set_text(GTK_LABEL (heading_label),
-                           /* Translators: Strings from this file are
+    case SINGLE_SEPA_TRANSFER:
+                            /* Translators: Strings from this file are
                              * needed only in countries that have one of
                              * aqbanking's Online Banking techniques
                              * available. This is 'OFX DirectConnect'
@@ -329,6 +402,24 @@ gnc_ab_trans_dialog_new(GtkWidget *parent, AB_ACCOUNT *ab_acc,
                              * country, you may safely ignore strings
                              * from the import-export/hbci
                              * subdirectory. */
+        gtk_label_set_text(GTK_LABEL(recp_account_heading),
+                           _("IBAN"));
+        gtk_label_set_text(GTK_LABEL(recp_bankcode_heading),
+                           _("BIC"));
+        gtk_label_set_text(GTK_LABEL(orig_account_heading),
+                           _("IBAN"));
+        gtk_label_set_text(GTK_LABEL(orig_bankcode_heading),
+                           "");            
+        gtk_entry_set_max_length(GTK_ENTRY(td->recp_account_entry),
+                                 30);
+        gtk_entry_set_max_length(GTK_ENTRY(td->recp_bankcode_entry),
+                                 11);
+        /* only free account number in this case as it has been generated */
+        g_free (ab_accountnumber);
+        break;
+    case SINGLE_DEBITNOTE:
+        gtk_label_set_text(GTK_LABEL (heading_label),
+                           
                            _("Enter an Online Direct Debit Note"));
 
         gtk_label_set_text(GTK_LABEL(recp_name_heading),
@@ -351,11 +442,6 @@ gnc_ab_trans_dialog_new(GtkWidget *parent, AB_ACCOUNT *ab_acc,
                    trans_type);
         break;
     }
-
-    gtk_label_set_text(GTK_LABEL(orig_name_label), ab_ownername);
-    gtk_label_set_text(GTK_LABEL(orig_account_label), ab_accountnumber);
-    gtk_label_set_text(GTK_LABEL(orig_bankname_label), ab_bankname);
-    gtk_label_set_text (GTK_LABEL (orig_bankcode_label), ab_bankcode);
 
     /* Fill list for choosing a transaction template */
     td->template_list_store = gtk_list_store_new(TEMPLATE_NUM_COLUMNS,
@@ -401,53 +487,71 @@ gnc_ab_trans_dialog_check_ktoblzcheck(const GncABTransDialog *td,
 #ifndef HAVE_KTOBLZCHECK_H
     return;
 #else
-    gint blzresult;
-    const char *blztext;
-    gchar* message;
 
-    ENTER(" ");
-
-    blzresult = AccountNumberCheck_check(
-                    td->blzcheck,
-                    AB_Transaction_GetRemoteBankCode(trans),
-                    AB_Transaction_GetRemoteAccountNumber(trans));
-    switch (blzresult)
+    switch (td->trans_type)
     {
-    case 2:
-        message = g_strdup_printf(_("The internal check of the destination account number '%s' "
-                                    "at the specified bank with bank code '%s' failed. This means "
-                                    "the account number might contain an error."),
-                                  AB_Transaction_GetRemoteAccountNumber(trans),
-                                  AB_Transaction_GetRemoteBankCode(trans));
-        gnc_ab_trans_dialog_entry_set (td->recp_bankcode_entry, message,
-                                       GTK_STOCK_DIALOG_WARNING);
-        gnc_ab_trans_dialog_entry_set (td->recp_account_entry, message,
-                                       GTK_STOCK_DIALOG_WARNING);
+        case SINGLE_SEPA_TRANSFER:
+        {
+            gint start, end;
+            const gchar* input = gtk_entry_get_text(GTK_ENTRY(td->recp_account_entry));
+            IbanCheck_Result result = IbanCheck_bic_position(td->ibancheck, input, &start, &end);
+            if (result == 0)
+            {
+                gchar* bic = g_strndup(input + start, end - start);
+                gtk_entry_set_text(GTK_ENTRY(td->recp_bankcode_entry), bic);
+                g_free(bic);
+            }
+            break;
+        }
+        default:
+        {
+            gint blzresult;
+            const char *blztext;
+            gchar* message;
 
-        blztext = "Kontonummer wahrscheinlich falsch";
-        break;
-    case 0:
-        blztext = "Kontonummer ok";
-        break;
-    case 3:
-        blztext = "bank unbekannt";
-        break;
-    case 1:
-    default:
-        blztext = "unbekannt aus unbekanntem grund";
-        break;
+            ENTER(" ");
+
+            blzresult = AccountNumberCheck_check(
+                                                 td->blzcheck,
+                                                 AB_Transaction_GetRemoteBankCode(trans),
+                                                 AB_Transaction_GetRemoteAccountNumber(trans));    
+            switch (blzresult)
+            {
+                case 2:
+                    message = g_strdup_printf(_("The internal check of the destination account number '%s' "
+                                                "at the specified bank with bank code '%s' failed. This means "
+                                                "the account number might contain an error."),
+                                              AB_Transaction_GetRemoteAccountNumber(trans),
+                                              AB_Transaction_GetRemoteBankCode(trans));
+                    gnc_ab_trans_dialog_entry_set (td->recp_bankcode_entry, message,
+                                                   GTK_STOCK_DIALOG_WARNING);
+                    gnc_ab_trans_dialog_entry_set (td->recp_account_entry, message,
+                                                   GTK_STOCK_DIALOG_WARNING);
+
+                    blztext = "Kontonummer wahrscheinlich falsch";
+                    break;
+                case 0:
+                    blztext = "Kontonummer ok";
+                    break;
+                case 3:
+                    blztext = "bank unbekannt";
+                    break;
+                case 1:
+                default:
+                    blztext = "unbekannt aus unbekanntem grund";
+                    break;
+                    if (blzresult != 2)
+                    {
+                        gnc_ab_trans_dialog_entry_set (td->recp_bankcode_entry, "",
+                                                       NULL);
+                        gnc_ab_trans_dialog_entry_set (td->recp_account_entry, "",
+                                                       NULL);
+                    }
+                    LEAVE("KtoBlzCheck said check is %d = %s",
+                          blzresult, blztext ? blztext : "(none)");
+            }
+        }
     }
-
-    if (blzresult != 2)
-    {
-        gnc_ab_trans_dialog_entry_set (td->recp_bankcode_entry, "",
-                                       NULL);
-        gnc_ab_trans_dialog_entry_set (td->recp_account_entry, "",
-                                       NULL);
-    }
-
-    LEAVE("KtoBlzCheck said check is %d = %s",
-          blzresult, blztext ? blztext : "(none)");
 #endif
 }
 
@@ -651,6 +755,7 @@ gnc_ab_trans_dialog_free(GncABTransDialog *td)
     }
 #if HAVE_KTOBLZCHECK_H
     AccountNumberCheck_delete(td->blzcheck);
+    IbanCheck_free(td->ibancheck);
 #endif
     g_free(td);
 }
@@ -718,6 +823,8 @@ gnc_ab_trans_dialog_get_available_empty_job(AB_ACCOUNT *ab_acc, GncABTransType t
     case SINGLE_INTERNAL_TRANSFER:
         job = AB_JobInternalTransfer_new(ab_acc);
         break;
+    case SINGLE_SEPA_TRANSFER:
+        job = AB_JobSepaTransfer_new(ab_acc);
     case SINGLE_TRANSFER:
     default:
         job = AB_JobSingleTransfer_new(ab_acc);
@@ -762,6 +869,8 @@ gnc_ab_get_trans_job(AB_ACCOUNT *ab_acc, const AB_TRANSACTION *ab_trans,
         case SINGLE_INTERNAL_TRANSFER:
             AB_JobInternalTransfer_SetTransaction(job, ab_trans);
             break;
+        case SINGLE_SEPA_TRANSFER:
+            AB_JobSepaTransfer_SetTransaction(job, ab_trans);
         case SINGLE_TRANSFER:
         default:
             AB_JobSingleTransfer_SetTransaction(job, ab_trans);
@@ -859,52 +968,63 @@ gnc_ab_trans_dialog_bankcode_changed_cb(GtkEditable *editable, gpointer user_dat
 {
 #if HAVE_KTOBLZCHECK_H
     GncABTransDialog *td = user_data;
-    const AccountNumberCheck_Record *record;
     const gchar *input = gtk_entry_get_text(GTK_ENTRY(td->recp_bankcode_entry));
 
     g_return_if_fail(td);
 
     ENTER("td=%p, input=%s", td, input);
-    record = AccountNumberCheck_findBank(td->blzcheck, input);
 
-    if (record)
+    switch (td->trans_type)
     {
-        const char *bankname = AccountNumberCheck_Record_bankName(record);
-        GError *error = NULL;
-        const char *ktoblzcheck_encoding =
-#ifdef KTOBLZCHECK_VERSION_MAJOR
-            /* This version number macro has been added in ktoblzcheck-1.10, but
-             * this function exists already since ktoblzcheck-1.7, so we're on
-             * the safe side. */
-            AccountNumberCheck_stringEncoding()
-#else
-            /* Every ktoblzcheck release before 1.10 is guaranteed to return
-             * strings only in ISO-8859-15. */
-            "ISO-8859-15"
-#endif
-            ;
-        gchar *utf8_bankname = g_convert(bankname, strlen(bankname), "UTF-8",
-                                         ktoblzcheck_encoding, NULL, NULL,
-                                         &error);
-
-        if (error)
+        case SINGLE_SEPA_TRANSFER:         
+            break;
+        default:
         {
-            g_critical("Error converting bankname \"%s\" to UTF-8", bankname);
-            g_error_free (error);
-            /* Conversion was erroneous, so don't use the string */
-            utf8_bankname = g_strdup(_("(unknown)"));
+            const AccountNumberCheck_Record *record;
+            record = AccountNumberCheck_findBank(td->blzcheck, input);
+
+            if (record)
+            {
+                const char *bankname = AccountNumberCheck_Record_bankName(record);
+                GError *error = NULL;
+                const char *ktoblzcheck_encoding =
+#ifdef KTOBLZCHECK_VERSION_MAJOR
+                    /* This version number macro has been added in ktoblzcheck-1.10, but
+                     * this function exists already since ktoblzcheck-1.7, so we're on
+                     * the safe side. */
+                    AccountNumberCheck_stringEncoding()
+#else
+                    /* Every ktoblzcheck release before 1.10 is guaranteed to return
+                     * strings only in ISO-8859-15. */
+                    "ISO-8859-15"
+#endif
+                    ;
+                gchar *utf8_bankname = g_convert(bankname, strlen(bankname), "UTF-8",
+                                                 ktoblzcheck_encoding, NULL, NULL,
+                                                 &error);
+
+                if (error)
+                {
+                    g_critical("Error converting bankname \"%s\" to UTF-8", bankname);
+                    g_error_free (error);
+                    /* Conversion was erroneous, so don't use the string */
+                    utf8_bankname = g_strdup(_("(unknown)"));
+                }
+                gtk_label_set_text(GTK_LABEL(td->recp_bankname_label),
+                                   *utf8_bankname ? utf8_bankname : _("(unknown)"));
+                DEBUG("Found: %s", utf8_bankname);
+                g_free(utf8_bankname);
+            }
+            else
+            {
+                gtk_label_set_text(GTK_LABEL(td->recp_bankname_label), _("(unknown)"));
+            }
+            LEAVE(" ");
         }
-        gtk_label_set_text(GTK_LABEL(td->recp_bankname_label),
-                           *utf8_bankname ? utf8_bankname : _("(unknown)"));
-        DEBUG("Found: %s", utf8_bankname);
-        g_free(utf8_bankname);
-    }
-    else
-    {
-        gtk_label_set_text(GTK_LABEL(td->recp_bankname_label), _("(unknown)"));
     }
     gnc_ab_trans_dialog_verify_values(td);
     LEAVE(" ");
+
 #endif
 }
 
@@ -1144,22 +1264,39 @@ gnc_ab_trans_dialog_entry_filter_cb (GtkEditable *editable,
                                      gint        *position,
                                      gpointer     data)
 {
+    GncABTransDialog *td = data;
     GString* result = g_string_new(NULL);
     gint i;
 
     if (length == -1)
         length = strlen(text);
 
-    /* Filter non digits */
-    for (i = 0; i < length; i++)
+    switch (td->trans_type)
     {
-        gchar c = text[i];
-        if (g_ascii_isdigit(c))
-        {
-            g_string_append_c(result, c);
-        }
+        case SINGLE_SEPA_TRANSFER:
+            /* Filter non alnum and uppercase string */
+            for (i = 0; i < length; i++)
+            {
+                gchar c = text[i];
+                if (g_ascii_isalnum(c))
+                {
+                    c = g_ascii_toupper(c);
+                    g_string_append_c(result, c);
+                }
+            }
+            break;
+        default:
+            /* Filter non digits */
+            for (i = 0; i < length; i++)
+            {
+                gchar c = text[i];
+                if (g_ascii_isdigit(c))
+                {
+                    g_string_append_c(result, c);
+                }
+            }
+            break;
     }
-
     g_signal_handlers_block_by_func (editable,
                                      (gpointer) gnc_ab_trans_dialog_entry_filter_cb, data);
     gtk_editable_insert_text (editable, result->str, result->len, position);

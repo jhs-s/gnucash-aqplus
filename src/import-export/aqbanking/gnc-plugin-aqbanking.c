@@ -71,6 +71,7 @@ static void gnc_plugin_ab_cmd_setup(GtkAction *action, GncMainWindowActionData *
 static void gnc_plugin_ab_cmd_get_balance(GtkAction *action, GncMainWindowActionData *data);
 static void gnc_plugin_ab_cmd_get_transactions(GtkAction *action, GncMainWindowActionData *data);
 static void gnc_plugin_ab_cmd_issue_transaction(GtkAction *action, GncMainWindowActionData *data);
+static void gnc_plugin_ab_cmd_issue_sepa_transaction(GtkAction *action, GncMainWindowActionData *data);
 static void gnc_plugin_ab_cmd_issue_inttransaction(GtkAction *action, GncMainWindowActionData *data);
 static void gnc_plugin_ab_cmd_issue_direct_debit(GtkAction *action, GncMainWindowActionData *data);
 static void gnc_plugin_ab_cmd_view_logwindow(GtkToggleAction *action, GncMainWindow *window);
@@ -110,6 +111,11 @@ static GtkActionEntry gnc_plugin_actions [] =
         "ABIssueTransAction", NULL, N_("_Issue Transaction..."), NULL,
         N_("Issue a new transaction online through Online Banking"),
         G_CALLBACK(gnc_plugin_ab_cmd_issue_transaction)
+    },
+    {
+        "ABIssueSepaTransAction", NULL, N_("_Issue SEPA-Transaction..."), NULL,
+        N_("Issue a new international (BIC/IBAN) transaction online through Online Banking"),
+        G_CALLBACK(gnc_plugin_ab_cmd_issue_sepa_transaction)
     },
     {
         "ABIssueIntTransAction", NULL, N_("I_nternal Transaction..."), NULL,
@@ -526,6 +532,26 @@ gnc_plugin_ab_cmd_issue_transaction(GtkAction *action,
     }
 
     gnc_ab_maketrans(GTK_WIDGET(data->window), account, SINGLE_TRANSFER);
+
+    LEAVE(" ");
+}
+
+static void
+gnc_plugin_ab_cmd_issue_sepa_transaction(GtkAction *action,
+                                         GncMainWindowActionData *data)
+{
+    Account *account;
+
+    ENTER("action %p, main window data %p", action, data);
+    account = main_window_to_account(data->window);
+    if (account == NULL)
+    {
+        g_message("No AqBanking account selected");
+        LEAVE("no account");
+        return;
+    }
+
+    gnc_ab_maketrans(GTK_WIDGET(data->window), account, SINGLE_SEPA_TRANSFER);
 
     LEAVE(" ");
 }

@@ -41,10 +41,10 @@
 G_BEGIN_DECLS
 
 /**
- * FIXME
+ * Use AqBanking for an online transaction
  *
  * @param parent Widget to use as parent, may be NULL
- * @param gnc_acc GnuCash account to fetch balance for
+ * @param gnc_acc GnuCash account transfer many from
  * @param trans_type Type of transaction
  */
 void gnc_ab_maketrans(GtkWidget *parent, Account *gnc_acc,
